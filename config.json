@@ -1,29 +1,29 @@
 {
    "model" : {
       "backend":              "Full Yolo",
-      "input_shape":          [416, 416, 3],
-      "anchors":              [1],
+      "input_shape":          [16, 256, 9600],
+      "anchors":              [0.21,0.49, 0.29,1.31, 0.47,0.66, 0.55,1.55, 1.08,1.33],
       "max_box_per_image":    10,
-      "labels":               ["bjet", "cjet", "sjet", "udjet"]
+      "labels":               ["udjet","sjet", "cjet","bjet", "gjet"]
    },
 
    "train": {
-      "train_image_folder":   "/Users/jchilders/git/keras-yolo2/ruidata",
+      "train_image_folder":   "/lcrc/group/ATLAS/users/rwang/ML/btaggingML/scripts/figures/2D/event1*",
       "evts_per_file":        10,
        
       "train_times":          8,
       "pretrained_weights":   "",
-      "batch_size":           16,
-      "learning_rate":        1e-4,
+      "batch_size":           1,
+      "learning_rate":        1e-3,
       "nb_epochs":            1,
-      "warmup_epochs":        3,
+      "warmup_epochs":        0,
 
       "object_scale":         5.0 ,
       "no_object_scale":      1.0,
       "coord_scale":          1.0,
       "class_scale":          1.0,
 
-      "saved_weights_name":   "",
+      "saved_weights_name":   "full_yolo_backend.h5",
       "debug":                true
    },
 

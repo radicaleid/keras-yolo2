@@ -56,7 +56,7 @@ class YOLO(object):
         else:
             raise Exception('Architecture not supported! Only support Full Yolo, Tiny Yolo, MobileNet, SqueezeNet, VGG16, ResNet50, and Inception3 at the moment!')
 
-        print(self.feature_extractor.get_output_shape())
+        #print(self.feature_extractor.get_output_shape())
         self.grid_h, self.grid_w = self.feature_extractor.get_output_shape()
         features = self.feature_extractor.extract(input_image)
 
@@ -65,7 +65,8 @@ class YOLO(object):
                         (1,1), strides=(1,1),
                         padding='same',
                         name='DetectionLayer',
-                        kernel_initializer='lecun_normal')(features)
+                        kernel_initializer='lecun_normal',
+                        data_format="channels_first")(features)
         output = Reshape((self.grid_h, self.grid_w, self.nb_box, 4 + 1 + self.nb_class))(output)
         output = Lambda(lambda args: args[0])([output, self.true_boxes])
 
@@ -85,10 +86,14 @@ class YOLO(object):
         self.model.summary()
 
     def custom_loss(self, y_true, y_pred):
+        print 'custom_loss...'
         mask_shape = tf.shape(y_true)[:4]
         
         cell_x = tf.to_float(tf.reshape(tf.tile(tf.range(self.grid_w), [self.grid_h]), (1, self.grid_h, self.grid_w, 1, 1)))
-        cell_y = tf.transpose(cell_x, (0,2,1,3,4))
+        cell_y = tf.to_float(tf.reshape(tf.tile(tf.range(self.grid_h), [self.grid_w]), (1, self.grid_w, self.grid_h, 1, 1)))
+        cell_y = tf.transpose(cell_y, (0,2,1,3,4))
+        #print tf.range(self.grid_w),[self.grid_h]
+        #print cell_x, cell_y
 
         cell_grid = tf.tile(tf.concat([cell_x,cell_y], -1), [self.batch_size, 1, 1, self.nb_box, 1])
         
@@ -103,8 +108,9 @@ class YOLO(object):
         Adjust prediction
         """
         ### adjust x and y
+        sess = tf.Session()
+        #print(sess.run(cell_grid))
         pred_box_xy = tf.sigmoid(y_pred[..., :2]) + cell_grid
-        
         ### adjust w and h
         pred_box_wh = tf.exp(y_pred[..., 2:4]) * np.reshape(self.anchors, [1,1,1,self.nb_box,2])
         
@@ -122,6 +128,7 @@ class YOLO(object):
         
         ### adjust w and h
         true_box_wh = y_true[..., 2:4] # number of cells accross, horizontally and vertically
+        print true_box_wh
         
         ### adjust confidence
         true_wh_half = true_box_wh / 2.
@@ -249,6 +256,7 @@ class YOLO(object):
                     valid_times,    # the number of times to repeat the validation set, often used for small datasets
                     nb_epochs,      # number of epoches
                     learning_rate,  # the learning rate
+                    evts_per_file,
                     batch_size,     # the size of the batch
                     warmup_epochs,  # number of initial batches to let the model familiarize with the new dataset
                     object_scale,
@@ -272,9 +280,9 @@ class YOLO(object):
         ############################################
 
         generator_config = {
-            'IMAGE_H'         : self.input_shape[0],
-            'IMAGE_W'         : self.input_shape[1],
-            'IMAGE_C'         : self.input_shape[2],
+            'IMAGE_C'         : self.input_shape[0],
+            'IMAGE_H'         : self.input_shape[1],
+            'IMAGE_W'         : self.input_shape[2],
             'GRID_H'          : self.grid_h,
             'GRID_W'          : self.grid_w,
             'BOX'             : self.nb_box,
@@ -283,16 +291,19 @@ class YOLO(object):
             'ANCHORS'         : self.anchors,
             'BATCH_SIZE'      : self.batch_size,
             'TRUE_BOX_BUFFER' : self.max_box_per_image,
+            'EVTS_PER_FILE'   : evts_per_file,
         }
 
         train_generator = BatchGenerator(train_imgs, 
-                                     generator_config, 
+                                     generator_config,
+                                     self.batch_size,
                                      norm=self.feature_extractor.normalize)
         valid_generator = BatchGenerator(valid_imgs, 
-                                     generator_config, 
+                                     generator_config,
+                                     self.batch_size,
                                      norm=self.feature_extractor.normalize,
                                      jitter=False)   
-                                     
+
         self.warmup_batches  = warmup_epochs * (train_times*len(train_generator) + valid_times*len(valid_generator))   
 
         ############################################
@@ -317,7 +328,7 @@ class YOLO(object):
                                      save_best_only=True, 
                                      mode='min', 
                                      period=1)
-        tensorboard = TensorBoard(log_dir=os.path.expanduser('~/logs/'), 
+        tensorboard = TensorBoard(log_dir=os.path.expanduser('./logs/'), 
                                   histogram_freq=0, 
                                   #write_batch_performance=True,
                                   write_graph=True, 
@@ -365,15 +376,18 @@ class YOLO(object):
             save_path       : The path to save images with visualized detections to.
         # Returns
             A dict mapping class names to mAP scores.
-        """    
+        """
+        print 'evaluate...'
         # gather all detections and annotations
-        all_detections     = [[None for i in range(generator.num_classes())] for j in range(generator.size())]
-        all_annotations    = [[None for i in range(generator.num_classes())] for j in range(generator.size())]
+        all_detections     = [[None for i in range(generator.num_classes)] for j in range(generator.size()*generator.config['EVTS_PER_FILE']*generator.config['BATCH_SIZE'])]
+        all_annotations    = [[None for i in range(generator.num_classes)] for j in range(generator.size()*generator.config['EVTS_PER_FILE']*generator.config['BATCH_SIZE'])]
 
-        for i in range(generator.size()):
+
+        for i in range(generator.size()*generator.config['EVTS_PER_FILE']*generator.config['BATCH_SIZE']):
             raw_image = generator.load_image(i)
+            
+            #print raw_image.shape
             raw_height, raw_width, raw_channels = raw_image.shape
-
             # make the boxes and the labels
             pred_boxes  = self.predict(raw_image)
 
@@ -392,19 +406,19 @@ class YOLO(object):
             pred_boxes  = pred_boxes[score_sort]
             
             # copy detections to all_detections
-            for label in range(generator.num_classes()):
+            for label in range(generator.num_classes):
                 all_detections[i][label] = pred_boxes[pred_labels == label, :]
                 
             annotations = generator.load_annotation(i)
             
             # copy detections to all_annotations
-            for label in range(generator.num_classes()):
+            for label in range(generator.num_classes):
                 all_annotations[i][label] = annotations[annotations[:, 4] == label, :4].copy()
                 
         # compute mAP by comparing all detections and all annotations
         average_precisions = {}
         
-        for label in range(generator.num_classes()):
+        for label in range(generator.num_classes):
             false_positives = np.zeros((0,))
             true_positives  = np.zeros((0,))
             scores          = np.zeros((0,))
@@ -462,14 +476,13 @@ class YOLO(object):
 
     def predict(self, image):
         image_h, image_w, _ = image.shape
-        image = cv2.resize(image, (self.input_shape[0], self.input_shape[1]))
+        #image = cv2.resize(image, (self.input_shape[0], self.input_shape[1]))
         image = self.feature_extractor.normalize(image)
-
+        
         input_image = image[:,:,::-1]
         input_image = np.expand_dims(input_image, 0)
         dummy_array = np.zeros((1,1,1,1,self.max_box_per_image,4))
 
         netout = self.model.predict([input_image, dummy_array])[0]
         boxes  = decode_netout(netout, self.anchors, self.nb_class)
-
         return boxes

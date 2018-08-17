@@ -3,7 +3,7 @@
 import argparse
 import os,glob
 import numpy as np
-from preprocessing import parse_annotation
+#from preprocessing import parse_annotation
 from frontend import YOLO
 import json
 
@@ -45,11 +45,12 @@ def _main_(args):
                                                  config['valid']['valid_image_folder'],
                                                  config['model']['labels'])
    else:'''
-   train_valid_split = int(0.8*len(filelist))
+   train_valid_split = int(0.5*len(filelist))
    np.random.shuffle(filelist)
 
-   valid_imgs = train_imgs[train_valid_split:]
-   train_imgs = train_imgs[:train_valid_split]
+   valid_imgs = filelist[train_valid_split:]
+   train_imgs = filelist[:train_valid_split]
+   print 'train_imgs,valid_imgs',train_imgs,valid_imgs
 
    ###############################
    #   Construct the model
@@ -65,13 +66,13 @@ def _main_(args):
    ###############################
    #   Start the training process
    ###############################
-
    yolo.train(train_imgs       = train_imgs,
             valid_imgs         = valid_imgs,
             train_times        = config['train']['train_times'],
             valid_times        = config['valid']['valid_times'],
             nb_epochs          = config['train']['nb_epochs'],
             learning_rate      = config['train']['learning_rate'],
+            evts_per_file      = config['train']['evts_per_file'],
             batch_size         = config['train']['batch_size'],
             warmup_epochs      = config['train']['warmup_epochs'],
             object_scale       = config['train']['object_scale'],

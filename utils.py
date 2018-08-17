@@ -76,7 +76,6 @@ def draw_boxes(image, boxes, labels):
         
 def decode_netout(netout, anchors, nb_class, obj_threshold=0.3, nms_threshold=0.3):
     grid_h, grid_w, nb_box = netout.shape[:3]
-
     boxes = []
     
     # decode the output by the network

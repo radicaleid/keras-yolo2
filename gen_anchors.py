@@ -1,8 +1,9 @@
 import random
 import argparse
 import numpy as np
+import os,glob
 
-from preprocessing import parse_annotation
+#from preprocessing import parse_annotation
 import json
 
 argparser = argparse.ArgumentParser()
@@ -20,11 +21,11 @@ argparser.add_argument(
     help='number of anchors to use')
 
 def IOU(ann, centroids):
-    w, h = ann
+    h,w = ann
     similarities = []
 
     for centroid in centroids:
-        c_w, c_h = centroid
+        c_h, c_w = centroid
 
         if c_w >= w and c_h >= h:
             similarity = w*h/(c_w*c_h)
@@ -104,29 +105,25 @@ def main(argv):
     config_path = args.conf
     num_anchors = args.anchors
 
-    with open(config_path) as config_buffer:
-        config = json.loads(config_buffer.read())
+    with open(args.conf) as config_buffer:
+      config = json.loads(config_buffer.read())
 
-    train_imgs, train_labels = parse_annotation(config['train']['train_annot_folder'],
-                                                config['train']['train_image_folder'],
-                                                config['model']['labels'])
-
-    grid_w = config['model']['input_size']/32
-    grid_h = config['model']['input_size']/32
+    filelist = glob.glob(config['train']['train_image_folder']+'/*')
 
     # run k_mean to find the anchors
     annotation_dims = []
-    for image in train_imgs:
-        cell_w = image['width']/grid_w
-        cell_h = image['height']/grid_h
-
-        for obj in image['object']:
-            relative_w = (float(obj['xmax']) - float(obj['xmin']))/cell_w
-            relatice_h = (float(obj["ymax"]) - float(obj['ymin']))/cell_h
-            annotation_dims.append(tuple(map(float, (relative_w,relatice_h))))
+    for filel in filelist:
+      train_imgs=np.load(filel)
+      for objs in train_imgs['truth']:
+        for obj in objs:
+          print obj
+          relative_w = obj[3]/(config['model']['input_shape'][1]/16.)
+          relative_h = obj[4]/(config['model']['input_shape'][0]/16.)
+          annotation_dims.append(tuple(map(float, (relative_h,relative_w))))
 
     annotation_dims = np.array(annotation_dims)
     centroids = run_kmeans(annotation_dims, num_anchors)
+    print annotation_dims,centroids
 
     # write anchors to file
     print('\naverage IOU for', num_anchors, 'anchors:', '%0.2f' % avg_IOU(annotation_dims, centroids))
