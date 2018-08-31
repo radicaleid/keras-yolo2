@@ -10,16 +10,21 @@ from utils import decode_netout, compute_overlap, compute_ap
 from keras.applications.mobilenet import MobileNet
 from keras.layers.merge import concatenate
 from keras.optimizers import SGD, Adam, RMSprop
+import horovod.keras as hvd
 from preprocessing import BatchGenerator
 from keras.callbacks import EarlyStopping, ModelCheckpoint, TensorBoard
 from backend import TinyYoloFeature, FullYoloFeature, MobileNetFeature, SqueezeNetFeature, Inception3Feature, VGG16Feature, ResNet50Feature
 from backend import FullYoloFeatureNCHW
 logger = logging.getLogger(__name__)
 
+# Horovod: initialize Horovod.
+hvd.init()
+
 # create custom session for TF
-config = tf.ConfigProto(intra_op_parallelism_threads=128,
-               inter_op_parallelism_threads=1,
-               allow_soft_placement=True)
+config = tf.ConfigProto()
+config.intra_op_parallelism_threads = 128
+config.inter_op_parallelism_threads = 1
+config.allow_soft_placement         = True
 session = tf.Session(config=config)
 keras_backend.set_session(session)
 
@@ -326,7 +331,7 @@ class YOLO(object):
         ############################################
 
         optimizer = Adam(lr=learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0)
-        # self.model.summary()
+        optimizer = hvd.DistributedOptimizer(optimizer)
 
         # self.model.compile(loss='mean_squared_error', optimizer=optimizer)
         self.model.compile(loss=self.custom_loss, optimizer=optimizer)
@@ -352,6 +357,18 @@ class YOLO(object):
                                   write_graph=True,
                                   write_images=False)
 
+        callbacks = [
+            # Horovod: broadcast initial variable states from rank 0 to all other processes.
+            # This is necessary to ensure consistent initialization of all workers when
+            # training is started with random weights or restored from a checkpoint.
+            hvd.callbacks.BroadcastGlobalVariablesCallback(0),
+            early_stop,
+            tensorboard,
+        ]
+
+        if hvd.rank() == 0:
+            callbacks.append(checkpoint)
+
         
 
         ############################################
@@ -364,7 +381,7 @@ class YOLO(object):
                                  verbose          = 2 if debug else 1,
                                  validation_data  = valid_generator,
                                  validation_steps = len(valid_generator) * valid_times,
-                                 callbacks        = [early_stop, checkpoint, tensorboard],
+                                 callbacks        = callbacks,
                                  workers          = 1,
                                  max_queue_size   = 5)
 
