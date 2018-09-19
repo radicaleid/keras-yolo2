@@ -42,7 +42,6 @@ class BatchGenerator(Sequence):
                jitter=True,
                norm=None):
       self.generator = None
-
       self.config          = config
       self.filelist        = filelist
       self.evts_per_file   = evts_per_file
@@ -60,6 +59,7 @@ class BatchGenerator(Sequence):
       self.norm    = norm
 
       self.anchors = [BoundBox(0, 0, config['ANCHORS'][2 * i], config['ANCHORS'][2 * i + 1]) for i in range(int(len(config['ANCHORS']) // 2))]
+
 
       '''
       ### augmentors by https://github.com/aleju/imgaug

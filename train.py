@@ -1,37 +1,50 @@
 #! /usr/bin/env python
 
 import argparse
-import os,glob,logging
+import glob,logging
 import numpy as np
 # from preprocessing import parse_annotation
 from frontend import YOLO
 import json
 logger = logging.getLogger(__name__)
 
-os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
-argparser = argparse.ArgumentParser(
-    description='Train and validate YOLO_v2 model on any dataset')
+def _main_():
 
-argparser.add_argument(
-    '-c',
-    '--conf',
-    help='path to configuration file')
+   parser = argparse.ArgumentParser(description='Atlas Training')
+   parser.add_argument('--config_file', '-c',
+                       help='configuration in standard json format.',required=True)
+   parser.add_argument('--tb_logdir', '-l',
+                       help='tensorboard logdir for this job.',default=None)
+   parser.add_argument('--horovod', default=False,
+                       help='use Horovod',action='store_true')
+   parser.add_argument('--num_files','-n', default=-1, type=int,
+                       help='limit the number of files to process. default is all')
+   parser.add_argument('--lr', default=0.01, type=int,
+                       help='learning rate')
+   parser.add_argument('--num_intra', type=int,
+                       help='num_intra',default=16)
+   parser.add_argument('--num_inter', type=int,
+                       help='num_inter',default=1)
+   parser.add_argument('--kmp_blocktime', type=int, default=10,
+                       help='KMP BLOCKTIME')
+   parser.add_argument('--kmp_affinity', default='granularity=fine,verbose,compact,1,0',
+                       help='KMP AFFINITY')
+   args = parser.parse_args()
 
 
-def _main_(args):
-   config_path = args.conf
-
-   with open(config_path) as config_buffer:
+   with open(args.config_file) as config_buffer:
       config = json.loads(config_buffer.read())
 
-   glob_str = config['train']['train_image_folder']# + '/*.npz'
+   if args.tb_logdir is not None:
+      config['tensorboard']['log_dir'] = args.tb_logdir
+
+   glob_str = config['train']['train_image_folder']  # + '/*.npz'
    filelist = glob.glob(glob_str)
 
+   logger.info('config = %s',config)
    logger.info('train_image_folder =   %s',glob_str)
    logger.info('filelist =             %s',filelist)
-
 
 
    ###############################
@@ -63,11 +76,7 @@ def _main_(args):
    #   Construct the model
    ###############################
 
-   yolo = YOLO(backend          = config['model']['backend'],
-            input_shape         = config['model']['input_shape'],
-            labels              = config['model']['labels'],
-            max_box_per_image   = config['model']['max_box_per_image'],
-            anchors             = config['model']['anchors'])
+   yolo = YOLO(config,args)
 
 
    ###############################
@@ -75,23 +84,9 @@ def _main_(args):
    ###############################
 
    yolo.train(train_imgs       = train_imgs,
-            valid_imgs         = valid_imgs,
-            evts_per_file      = config['train']['evts_per_file'],
-            train_times        = config['train']['train_times'],
-            valid_times        = config['valid']['valid_times'],
-            nb_epochs          = config['train']['nb_epochs'],
-            learning_rate      = config['train']['learning_rate'],
-            batch_size         = config['train']['batch_size'],
-            warmup_epochs      = config['train']['warmup_epochs'],
-            object_scale       = config['train']['object_scale'],
-            no_object_scale    = config['train']['no_object_scale'],
-            coord_scale        = config['train']['coord_scale'],
-            class_scale        = config['train']['class_scale'],
-            saved_weights_name = config['train']['saved_weights_name'],
-            debug              = config['train']['debug'])
+            valid_imgs         = valid_imgs)
 
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,format='%(asctime)s %(levelname)s:%(name)s:%(message)s')
-    args = argparser.parse_args()
-    _main_(args)
+    _main_()

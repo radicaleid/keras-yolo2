@@ -1,49 +1,65 @@
-from keras.models import Model
-from keras.layers import Reshape, Activation, Conv2D, Input, MaxPooling2D, BatchNormalization, Flatten, Dense, Lambda
-from keras.layers.advanced_activations import LeakyReLU
-import tensorflow as tf
-from keras import backend as keras_backend
 import numpy as np
-import os,time,logging
-import cv2
-from utils import decode_netout, compute_overlap, compute_ap
-from keras.applications.mobilenet import MobileNet
-from keras.layers.merge import concatenate
-from keras.optimizers import SGD, Adam, RMSprop
-import horovod.keras as hvd
-from preprocessing import BatchGenerator
+import os,logging,datetime
+
+from keras import backend as keras_backend
+from keras.models import Model
+from keras.layers import Reshape, Conv2D, Input, Lambda
+from keras.optimizers import Adam
 from keras.callbacks import EarlyStopping, ModelCheckpoint, TensorBoard
+
+import tensorflow as tf
+from utils import decode_netout, compute_overlap, compute_ap
+from preprocessing import BatchGenerator
 from backend import TinyYoloFeature, FullYoloFeature, MobileNetFeature, SqueezeNetFeature, Inception3Feature, VGG16Feature, ResNet50Feature
 from backend import FullYoloFeatureNCHW
+
+from callbacks import TB
+
 logger = logging.getLogger(__name__)
 
-# Horovod: initialize Horovod.
-hvd.init()
 
-# create custom session for TF
-config = tf.ConfigProto()
-config.intra_op_parallelism_threads = 128
-config.inter_op_parallelism_threads = 1
-config.allow_soft_placement         = True
-session = tf.Session(config=config)
-keras_backend.set_session(session)
+def create_config_proto(params):
+   '''EJ: TF config setup'''
+   config = tf.ConfigProto()
+   config.intra_op_parallelism_threads = params.num_intra
+   config.inter_op_parallelism_threads = params.num_inter
+   config.allow_soft_placement         = True
+   os.environ['KMP_BLOCKTIME'] = str(params.kmp_blocktime)
+   os.environ['KMP_AFFINITY'] = params.kmp_affinity
+   return config
+
 
 class YOLO(object):
-    def __init__(self, backend,
-                       input_shape,
-                       labels,
-                       max_box_per_image,
-                       anchors):
-
-        self.input_shape = input_shape
+    def __init__(self, config_file,
+                       args):
+        logger.debug('YOLO init')
+        self.config_file = config_file
+        self.args = args
+        self.input_shape = tuple(config_file['model']['input_shape'])
         
-        self.labels   = list(labels)
-        self.nb_class = len(self.labels)
-        self.nb_box   = len(anchors) // 2
+        self.labels   = config_file['model']['labels']
+        self.nb_class = len(config_file['model']['labels'])
+        self.nb_box   = len(config_file['model']['anchors']) // 2
         self.class_wt = np.ones(self.nb_class, dtype='float32')
-        self.anchors  = anchors
+        self.anchors  = config_file['model']['anchors']
 
-        self.max_box_per_image = max_box_per_image
+        self.max_box_per_image = config_file['model']['max_box_per_image']
+        backend = config_file['model']['backend']
+
+
+        if self.args.horovod:
+           logger.debug("importing hvd")
+           import horovod.keras as hvd
+           self.hvd = hvd
+           logger.info('horovod from: %s',hvd.__file__)
+           logger.debug('hvd init')
+           self.hvd.init()
+           logger.info("Rank: %s",self.hvd.rank())
+
+
+        config_proto = create_config_proto(self.args)
+        keras_backend.set_session(tf.Session(config=config_proto))
+        logger.debug("done config proto")
 
         ##########################
         # Make the model
@@ -51,7 +67,7 @@ class YOLO(object):
 
         # make the feature extractor layers
         input_image     = Input(shape=tuple(self.input_shape))
-        self.true_boxes = Input(shape=(1, 1, 1, max_box_per_image, 4))
+        self.true_boxes = Input(shape=(1, 1, 1, self.max_box_per_image, 4))
 
         if backend == 'Inception3':
             self.feature_extractor = Inception3Feature(self.input_shape)
@@ -71,6 +87,8 @@ class YOLO(object):
             self.feature_extractor = ResNet50Feature(self.input_shape)
         else:
             raise Exception('Architecture not supported! Only support Full Yolo, Tiny Yolo, MobileNet, SqueezeNet, VGG16, ResNet50, and Inception3 at the moment!')
+
+        logger.debug("done building feature extractor")
 
         self.feature_extractor.feature_extractor.summary()
         self.grid_h, self.grid_w = self.feature_extractor.get_output_shape()
@@ -101,13 +119,13 @@ class YOLO(object):
 
         # print a summary of the whole model
         self.model.summary()
+        logger.debug("done YOLO init")
 
     def custom_loss(self, y_true, y_pred):
-        start = time.time()
         mask_shape = tf.shape(y_true)[:4]
         
         cell_x = tf.to_float(tf.reshape(tf.tile(tf.range(self.grid_w), [self.grid_h]), (1, self.grid_h, self.grid_w, 1, 1)))
-        #tf.Print(cell_x.shape,cell_x)
+        # tf.Print(cell_x.shape,cell_x)
         cell_y = tf.to_float(tf.reshape(tf.tile(tf.range(self.grid_h), [self.grid_w]), (1, self.grid_w, self.grid_h, 1, 1)))
         cell_y = tf.transpose(cell_y, (0,2,1,3,4))
 
@@ -142,10 +160,10 @@ class YOLO(object):
         Adjust ground truth
         """
         ### adjust x and y
-        true_box_xy = y_true[..., 0:2] # relative position to the containing cell
+        true_box_xy = y_true[..., 0:2]  # relative position to the containing cell
         
         ### adjust w and h
-        true_box_wh = y_true[..., 2:4] # number of cells accross, horizontally and vertically
+        true_box_wh = y_true[..., 2:4]  # number of cells accross, horizontally and vertically
         
         '''
         ### adjust confidence
@@ -155,7 +173,7 @@ class YOLO(object):
         
         pred_wh_half = pred_box_wh / 2.
         pred_mins    = pred_box_xy - pred_wh_half
-        pred_maxes   = pred_box_xy + pred_wh_half  
+        pred_maxes   = pred_box_xy + pred_wh_half
         
         intersect_mins  = tf.maximum(pred_mins,  true_mins)
         intersect_maxes = tf.minimum(pred_maxes, true_maxes)
@@ -194,7 +212,7 @@ class YOLO(object):
         
         pred_wh_half = pred_wh / 2.
         pred_mins    = pred_xy - pred_wh_half
-        pred_maxes   = pred_xy + pred_wh_half    
+        pred_maxes   = pred_xy + pred_wh_half
         
         intersect_mins  = tf.maximum(pred_mins,  true_mins)
         intersect_maxes = tf.minimum(pred_maxes, true_maxes)
@@ -272,102 +290,143 @@ class YOLO(object):
         self.model.load_weights(weight_path)
 
     def train(self, train_imgs,     # the list of images to train the model
-                    valid_imgs,     # the list of images used to validate the model
-                    evts_per_file,  # the number of events in each file
-                    train_times,    # the number of time to repeat the training set, often used for small datasets
-                    valid_times,    # the number of times to repeat the validation set, often used for small datasets
-                    nb_epochs,      # number of epoches
-                    learning_rate,  # the learning rate
-                    batch_size,     # the size of the batch
-                    warmup_epochs,  # number of initial batches to let the model familiarize with the new dataset
-                    object_scale,
-                    no_object_scale,
-                    coord_scale,
-                    class_scale,
-                    saved_weights_name='',
-                    debug=False):     
+                    valid_imgs,     # the list of images used to
+             ):
+        logger.debug("YOLO train")
+        evts_per_file      = self.config_file['train']['evts_per_file']
+        train_times        = self.config_file['train']['train_times']
+        valid_times        = self.config_file['valid']['valid_times']
+        nb_epochs          = self.config_file['train']['nb_epochs']
+        learning_rate      = self.config_file['train']['learning_rate']
+        self.batch_size    = self.config_file['train']['batch_size']
+        warmup_epochs      = self.config_file['train']['warmup_epochs']
+        self.object_scale       = self.config_file['train']['object_scale']
+        self.no_object_scale    = self.config_file['train']['no_object_scale']
+        self.coord_scale        = self.config_file['train']['coord_scale']
+        self.class_scale        = self.config_file['train']['class_scale']
+        self.saved_weights_name = self.config_file['train']['saved_weights_name']
+        self.debug              = self.config_file['train']['debug']
 
-        self.batch_size = batch_size
 
-        self.object_scale    = object_scale
-        self.no_object_scale = no_object_scale
-        self.coord_scale     = coord_scale
-        self.class_scale     = class_scale
-
-        self.debug = debug
 
         ############################################
         # Make train and validation generators
         ############################################
 
         generator_config = {
-            'IMAGE_C'         : self.input_shape[0],
-            'IMAGE_H'         : self.input_shape[1],
-            'IMAGE_W'         : self.input_shape[2],
-            'GRID_H'          : self.grid_h,
-            'GRID_W'          : self.grid_w,
-            'BOX'             : self.nb_box,
-            'LABELS'          : self.labels,
-            'CLASS'           : len(self.labels),
-            'ANCHORS'         : self.anchors,
-            'BATCH_SIZE'      : self.batch_size,
-            'TRUE_BOX_BUFFER' : self.max_box_per_image,
+            'IMAGE_C': self.input_shape[0],
+            'IMAGE_H': self.input_shape[1],
+            'IMAGE_W': self.input_shape[2],
+            'GRID_H': self.grid_h,
+            'GRID_W': self.grid_w,
+            'BOX': self.nb_box,
+            'LABELS': self.labels,
+            'CLASS': len(self.labels),
+            'ANCHORS': self.anchors,
+            'BATCH_SIZE': self.batch_size,
+            'TRUE_BOX_BUFFER': self.max_box_per_image,
         }
+        logger.debug("create batch generators")
 
-        train_generator = BatchGenerator(train_imgs, 
-                                     generator_config, 
+        train_generator = BatchGenerator(train_imgs,
+                                     generator_config,
                                      evts_per_file,
                                      norm=self.feature_extractor.normalize)
-        valid_generator = BatchGenerator(valid_imgs, 
-                                     generator_config, 
+        valid_generator = BatchGenerator(valid_imgs,
+                                     generator_config,
                                      evts_per_file,
                                      norm=self.feature_extractor.normalize,
-                                     jitter=False)   
+                                     jitter=False)
+        logger.debug("done batch generators")
                                      
-        self.warmup_batches  = warmup_epochs * (train_times*len(train_generator) + valid_times*len(valid_generator))   
+        self.warmup_batches  = warmup_epochs * (train_times * len(train_generator) + valid_times * len(valid_generator))
 
         ############################################
         # Compile the model
         ############################################
 
+        logger.debug("create Adam")
         optimizer = Adam(lr=learning_rate, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0)
-        optimizer = hvd.DistributedOptimizer(optimizer)
+        if self.args.horovod:
+            logger.debug("hvd optimizer")
+            optimizer = self.hvd.DistributedOptimizer(optimizer)
 
         # self.model.compile(loss='mean_squared_error', optimizer=optimizer)
+        logger.debug("compile model")
         self.model.compile(loss=self.custom_loss, optimizer=optimizer)
+        logger.debug("done compile model")
 
         ############################################
         # Make a few callbacks
         ############################################
 
-        early_stop = EarlyStopping(monitor='val_loss',
-                           min_delta=0.001,
-                           patience=3,
-                           mode='min',
-                           verbose=1)
-        checkpoint = ModelCheckpoint('weights.{epoch:02d}-{val_loss:.2f}.hdf5',
-                                     monitor='val_loss',
-                                     verbose=1,
-                                     save_best_only=True,
-                                     mode='min',
-                                     period=1)
-        tensorboard = TensorBoard(log_dir='./logs',
-                                  histogram_freq=0,
-                                  # write_batch_performance=True,
-                                  write_graph=True,
-                                  write_images=False)
+        dateString = datetime.datetime.strftime(datetime.datetime.now(),'%Y-%m-%d-%H-%M-%S')
+        log_path = os.path.join(self.config_file['tensorboard']['log_dir'],dateString)
 
-        callbacks = [
+        
+
+        verbose = self.config_file['train']['verbose']
+        if self.args.horovod:
+            logger.debug("hvd callbacks")
+            callbacks = []
             # Horovod: broadcast initial variable states from rank 0 to all other processes.
             # This is necessary to ensure consistent initialization of all workers when
             # training is started with random weights or restored from a checkpoint.
-            hvd.callbacks.BroadcastGlobalVariablesCallback(0),
-            early_stop,
-            tensorboard,
-        ]
+            callbacks.append(self.hvd.callbacks.BroadcastGlobalVariablesCallback(0))
+            
+            # Horovod: average metrics among workers at the end of every epoch.
+            #
+            # Note: This callback must be in the list before the ReduceLROnPlateau,
+            # TensorBoard or other metrics-based callbacks.
+            callbacks.append(self.hvd.callbacks.MetricAverageCallback())
 
-        if hvd.rank() == 0:
-            callbacks.append(checkpoint)
+            # create tensorboard callback
+            tensorboard = TB(log_dir=log_path,
+                           histogram_freq=self.config_file['tensorboard']['histogram_freq'],
+                           write_graph=self.config_file['tensorboard']['write_graph'],
+                           write_images=self.config_file['tensorboard']['write_images'],
+                           write_grads=self.config_file['tensorboard']['write_grads'],
+                           embeddings_freq=self.config_file['tensorboard']['embeddings_freq'])
+            callbacks.append(tensorboard)
+            if self.hvd.rank() == 0:
+               verbose = self.config_file['train']['verbose']
+               os.makedirs(log_path)
+
+               checkpoint = ModelCheckpoint(self.config_file['model']['model_checkpoint_file'].format(date=dateString),
+                              monitor='val_loss',
+                              verbose=1,
+                              save_best_only=True,
+                              mode='min',
+                              period=1)
+               callbacks.append(checkpoint)
+            else:
+               verbose = 0
+        else:
+           os.makedirs(log_path)
+           early_stop = EarlyStopping(monitor='val_loss',
+                              min_delta=0.001,
+                              patience=3,
+                              mode='min',
+                              verbose=1)
+           checkpoint = ModelCheckpoint(self.config_file['model']['model_checkpoint_file'].format(date=dateString),
+                                        monitor='val_loss',
+                                        verbose=1,
+                                        save_best_only=True,
+                                        mode='min',
+                                        period=1)
+           tensorboard = TensorBoard(log_dir='./logs',
+                                     histogram_freq=0,
+                                     # write_batch_performance=True,
+                                     write_graph=True,
+                                     write_images=False)
+
+           callbacks = [
+               early_stop,
+               checkpoint,
+               tensorboard,
+           ]
+           
+        logger.debug("fit generator")
 
         
 
@@ -376,11 +435,11 @@ class YOLO(object):
         ############################################
 
         self.model.fit_generator(generator        = train_generator,
-                                 steps_per_epoch  = len(train_generator) * train_times,
-                                 epochs           = warmup_epochs + nb_epochs,
-                                 verbose          = 2 if debug else 1,
+                                 steps_per_epoch  = len(train_generator),
+                                 epochs           = nb_epochs,
+                                 verbose          = verbose,
                                  validation_data  = valid_generator,
-                                 validation_steps = len(valid_generator) * valid_times,
+                                 validation_steps = len(valid_generator),
                                  callbacks        = callbacks,
                                  workers          = 1,
                                  max_queue_size   = 5)
@@ -429,7 +488,11 @@ class YOLO(object):
             pred_labels = np.array([box.label for box in pred_boxes])
             
             if len(pred_boxes) > 0:
-                pred_boxes = np.array([[box.xmin*raw_width, box.ymin*raw_height, box.xmax*raw_width, box.ymax*raw_height, box.score] for box in pred_boxes])
+                pred_boxes = np.array([[box.xmin * raw_width,
+                                        box.ymin * raw_height,
+                                        box.xmax * raw_width,
+                                        box.ymax * raw_height,
+                                        box.score] for box in pred_boxes])
             else:
                 pred_boxes = np.array([[]])
             
