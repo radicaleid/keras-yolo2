@@ -9,7 +9,7 @@
    },
 
    "train": {
-      "train_image_folder":   "/lus/scratch/kristyn/atlasml/data/*jets/*/*.npz",
+      "train_image_folder":   "/projects/datascience/parton/atlasml/*jets/*/*.npz",
       "evts_per_file":        10,
        
       "train_times":          1,
