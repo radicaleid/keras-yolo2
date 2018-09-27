@@ -9,7 +9,7 @@
    },
 
    "train": {
-      "train_image_folder":   "/Users/jchilders/git/keras-yolo2/data/scripts_figures_2D_event1*",
+      "train_image_folder":   "/lus/scratch/kristyn/atlasml/data/*jets/*/*.npz",
       "evts_per_file":        10,
        
       "train_times":          1,

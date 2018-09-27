@@ -18,6 +18,8 @@ def _main_():
                        help='tensorboard logdir for this job.',default=None)
    parser.add_argument('--horovod', default=False,
                        help='use Horovod',action='store_true')
+   parser.add_argument('--ml_comm', default=False,
+                       help='use Cray PE ML Plugin',action='store_true')
    parser.add_argument('--num_files','-n', default=-1, type=int,
                        help='limit the number of files to process. default is all')
    parser.add_argument('--lr', default=0.01, type=int,

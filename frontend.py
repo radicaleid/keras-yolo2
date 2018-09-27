@@ -2,6 +2,7 @@ import numpy as np
 import os,logging,datetime
 
 from keras import backend as keras_backend
+import math
 from keras.models import Model
 from keras.layers import Reshape, Conv2D, Input, Lambda
 from keras.optimizers import Adam
@@ -55,6 +56,19 @@ class YOLO(object):
            logger.debug('hvd init')
            self.hvd.init()
            logger.info("Rank: %s",self.hvd.rank())
+
+        if self.args.ml_comm:
+           logger.debug("importing ml_comm")
+           import ml_comm as mc
+           from plugin_keras import InitPluginCallback, BroadcastVariablesCallback, DistributedOptimizer
+           self.mc = mc
+           self.InitPluginCallback = InitPluginCallback
+           self.BroadcastVariablesCallback =BroadcastVariablesCallback
+           self.DistributedOptimizer = DistributedOptimizer
+           logger.info('ml_comm from: %s',mc.__file__)
+           logger.debug('mc init')
+           self.mc.init_mpi()
+           logger.info("Rank: %s",self.mc.get_rank())
 
 
         config_proto = create_config_proto(self.args)
@@ -351,11 +365,37 @@ class YOLO(object):
             logger.debug("hvd optimizer")
             optimizer = self.hvd.DistributedOptimizer(optimizer)
 
+        if self.args.ml_comm:
+            logger.debug("Distributed optimizer")
+            optimizer = self.DistributedOptimizer(optimizer)
+
         # self.model.compile(loss='mean_squared_error', optimizer=optimizer)
         logger.debug("compile model")
         self.model.compile(loss=self.custom_loss, optimizer=optimizer)
         logger.debug("done compile model")
 
+        # To use Cray Plugin we need to calculate the number of trainable variables 
+        # Also useful to adjust number of epochs run
+        if self.args.ml_comm:
+            trainable_count = int(
+              np.sum([keras_backend.count_params(p) for p in set(self.model.trainable_weights)]))
+            non_trainable_count = int(
+              np.sum([keras_backend.count_params(p) for p in set(self.model.non_trainable_weights)]))
+
+            # Adjust number of Epochs based on number of ranks used
+            nb_epochs = int(nb_epochs / self.mc.get_nranks())
+            if nb_epochs == 0:
+              nb_epochs = 1
+            total_steps = int(math.ceil((warmup_epochs + nb_epochs)*(
+                           (train_times*len(train_imgs)+
+                           valid_times*len(valid_imgs))/self.batch_size)))
+
+            #if hvd.rank() == 0:
+            #if mc.get_rank() == 0:
+            #  print('Total params: {:,}'.format(trainable_count + non_trainable_count))
+            #  print('Trainable params: {:,}'.format(trainable_count))
+            #  print('Non-trainable params: {:,}'.format(non_trainable_count))
+            #  print('Calculation of total_steps: {:,}'.format(total_steps))
         ############################################
         # Make a few callbacks
         ############################################
@@ -389,6 +429,28 @@ class YOLO(object):
                            embeddings_freq=self.config_file['tensorboard']['embeddings_freq'])
             callbacks.append(tensorboard)
             if self.hvd.rank() == 0:
+               verbose = self.config_file['train']['verbose']
+               os.makedirs(log_path)
+
+               checkpoint = ModelCheckpoint(self.config_file['model']['model_checkpoint_file'].format(date=dateString),
+                              monitor='val_loss',
+                              verbose=1,
+                              save_best_only=True,
+                              mode='min',
+                              period=1)
+               callbacks.append(checkpoint)
+            else:
+               verbose = 0
+        elif self.args.ml_comm:
+            logger.debug("cray-plugin callbacks")
+            callbacks = []
+            # Cray ML Plugin: broadcast callback
+            init_plugin = self.InitPluginCallback(total_steps, trainable_count)
+
+            callbacks.append(init_plugin)
+            broadcast   = self.BroadcastVariablesCallback(0)
+            callbacks.append(broadcast)
+            if self.mc.get_rank() == 0:
                verbose = self.config_file['train']['verbose']
                os.makedirs(log_path)
 
