@@ -1,0 +1,24 @@
+## Instructions for running the keras-yolo2 training process
+## over the atlas-ml data on theta. This utilizes a version
+## of the craype ML plugin library built specifically for
+## the default tensorflow available on Theta.
+
+# Get the updated keras code
+git clone https://github.com/jtchilders/keras-yolo2.git
+cd keras-yolo2
+git checkout plugin_plus_horovod
+
+# Install opencv locally (if not already installed)
+module load intelpython35/2017.0.035
+pip install opencv-python --user
+
+# Get your allocation
+qsub -I -n 2 -t 60 -q debug-flat-quad --attrs enable_ssh=1 -A datascience
+
+# Load necessary packages
+module use /projects/datascience/kristyn/modulefiles
+module load craype-ml-plugin-py3/1.1.2 
+module load keras
+
+cd /path/to/keras-yolo2
+aprun -n 2 -N 1 python train.py -c config.json --ml_comm

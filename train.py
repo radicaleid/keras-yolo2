@@ -25,7 +25,7 @@ def _main_():
    parser.add_argument('--lr', default=0.01, type=int,
                        help='learning rate')
    parser.add_argument('--num_intra', type=int,
-                       help='num_intra',default=16)
+                       help='num_intra',default=64)
    parser.add_argument('--num_inter', type=int,
                        help='num_inter',default=1)
    parser.add_argument('--kmp_blocktime', type=int, default=10,
