@@ -9,6 +9,9 @@ if sys.version_info.major >= 3:
 else:
    import thread as threadmod
 
+from scipy import sparse
+import tensorflow as tf
+
 import numpy as np
 # import imgaug as ia
 # from imgaug import augmenters as iaa
@@ -40,8 +43,9 @@ class BatchGenerator(Sequence):
                evts_per_file,
                shuffle=True,
                jitter=True,
-               norm=None):
-      self.generator = None
+               norm=None,
+               sparse=False):
+      self.generator       = None
       self.config          = config
       self.filelist        = filelist
       self.evts_per_file   = evts_per_file
@@ -54,6 +58,7 @@ class BatchGenerator(Sequence):
       self.num_grid_y      = config['GRID_H']
       self.pix_per_grid_y  = float(self.config['IMAGE_H']) / self.config['GRID_H']
 
+      self.sparse  = sparse
       self.shuffle = shuffle
       self.jitter  = jitter
       self.norm    = norm
@@ -125,13 +130,22 @@ class BatchGenerator(Sequence):
          np.random.shuffle(self.filelist)
 
     def __len__(self):
-        return int(np.ceil(float(self.nevts) / self.config['BATCH_SIZE']))
+        return int(np.floor(float(self.nevts) / self.config['BATCH_SIZE']))
 
     def get_num_classes(self):
         return self.num_classes
 
     def size(self):
         return self.nevts
+
+    # Convert a list of scipy sparse arrays in csr format to a 3D sparse tensorflow Tensor
+    # sparse_matrices: list of sparse scipy arrays
+    def importSparse2DenseTensor(self, sparse_matrices, shape):
+        dense_mats = []
+        for i, s_mat in enumerate(sparse_matrices):
+            dns = np.array(s_mat.todense())
+            dense_mats.append(dns)
+        return np.stack(dense_mats)#tf.sparse_to_dense(new_indices, shape, np.concatenate(new_data)).eval() 
 
     def load_annotation(self, i):
         file_index = int(i / self.evts_per_file)
@@ -153,45 +167,58 @@ class BatchGenerator(Sequence):
         start = time.time()
         logger.debug('starting get batch of size %s',self.batch_size)
 
-
         instance_count = 0
 
-        x_batch = np.zeros((self.batch_size, self.config['IMAGE_C'], self.config['IMAGE_H'], self.config['IMAGE_W']))                         # input images
-        b_batch = np.zeros((self.batch_size, 1, 1, 1, self.config['TRUE_BOX_BUFFER'], 4))   # list of self.config['TRUE_self.config['BOX']_BUFFER'] GT boxes
-        # turam - removed space for anchor boxes
-        # y_batch = np.zeros((r_bound - l_bound, self.config['GRID_H'],  self.config['GRID_W'], self.config['BOX'], 4+1+len(self.config['LABELS'])))                # desired network output
-        y_batch = np.zeros((self.batch_size, self.config['GRID_H'], self.config['GRID_W'], self.config['BOX'], 4 + 1 + len(self.config['LABELS'])))                # desired network output
+        # Initialize x_batch based on data input format. Represents the input images
+        img_shape = (self.config['IMAGE_C'], self.config['IMAGE_H'], self.config['IMAGE_W'])
+        if self.sparse:
+            x_batch = [] 
+        else:
+            x_batch = np.zeros((self.batch_size,) + img_shape)
+
+        # list of self.config['TRUE_self.config['BOX']_BUFFER'] GT boxes
+        b_batch = np.zeros((self.batch_size, 1, 1, 1, self.config['TRUE_BOX_BUFFER'], 4))           # turam - removed space for anchor boxes
+        # y_batch = np.zeros((r_bound - l_bound, self.config['GRID_H'],  self.config['GRID_W'], self.config['BOX'], 4+1+len(self.config['LABELS'])))         # desired network output
+        y_batch = np.zeros((self.batch_size, 
+                            self.config['GRID_H'], 
+                            self.config['GRID_W'], 
+                            self.config['BOX'], 
+                            4 + 1 + len(self.config['LABELS'])))  
 
         global_image_index = self.batch_size * idx
         image_index = global_image_index % self.evts_per_file
         file_index = global_image_index // self.evts_per_file
 
-        logger.debug('[{0}] thread {1} opening file with idx {2} file_index {3} image_index {4}'.format(time.time() - start,threadmod.get_ident(), idx, file_index,image_index))
+        logger.debug('[{0}] thread {1} opening file with idx {2} file_index {3} image_index {4}'.format(
+            time.time() - start,threadmod.get_ident(), idx, file_index,image_index))
 
         if file_index < len(self.filelist):
             file_content = np.load(self.filelist[file_index])
+            if self.sparse:
+                file_index += 1
         else:
             raise Exception('file_index {0} is outside range for filelist {1}'.format(file_index,len(self.filelist)))
 
         for i in range(self.config['BATCH_SIZE']):
             logger.debug('[{0}] loop {1} start'.format(time.time() - start,i))
 
-
-            if image_index >= self.evts_per_file:
-              file_index += 1
-              file_content = np.load(self.filelist[file_index])
-              image_index = 0
-
-            x_batch[instance_count] = file_content['raw'][image_index]
-            all_objs = file_content['truth'][image_index]
-
+            if not self.sparse and image_index >= self.evts_per_file:
+                file_index += 1
+                file_content = np.load(self.filelist[file_index])
+                image_index = 0
+            
+            if self.sparse:
+                x_batch.append(self.importSparse2DenseTensor(file_content[0], img_shape))
+                all_objs = file_content[2]
+            else:
+                x_batch[instance_count] = file_content['raw'][image_index]
+                all_objs = file_content['truth'][image_index]
 
             logger.debug('[{0}] loop {1} file loaded'.format(time.time() - start,i))
 
             # augment input image and fix object's position and size
             # img, all_objs = self.aug_image(img, all_objs, jitter=self.jitter)
 
-            
             # construct output from object's x, y, w, h
             true_box_index = 0
             
@@ -251,6 +278,8 @@ class BatchGenerator(Sequence):
         logger.debug('[{0}] exiting'.format(time.time() - start))
 
         # print(' new batch created', idx)
+        if self.sparse:
+            x_batch = np.stack(x_batch)
 
         return [x_batch, b_batch], y_batch
 

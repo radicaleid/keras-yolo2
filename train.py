@@ -25,13 +25,15 @@ def _main_():
    parser.add_argument('--lr', default=0.01, type=int,
                        help='learning rate')
    parser.add_argument('--num_intra', type=int,
-                       help='num_intra',default=64)
+                       help='num_intra',default=62)
    parser.add_argument('--num_inter', type=int,
-                       help='num_inter',default=1)
+                       help='num_inter',default=2)
    parser.add_argument('--kmp_blocktime', type=int, default=10,
                        help='KMP BLOCKTIME')
    parser.add_argument('--kmp_affinity', default='granularity=fine,verbose,compact,1,0',
                        help='KMP AFFINITY')
+   parser.add_argument('--sparse', action='store_true',
+                       help="Indicate that the input data is in sparse format")
    args = parser.parse_args()
 
 

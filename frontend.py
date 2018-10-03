@@ -70,6 +70,7 @@ class YOLO(object):
            self.mc.init_mpi()
            logger.info("Rank: %s",self.mc.get_rank())
 
+        self.sparse = args.sparse
 
         config_proto = create_config_proto(self.args)
         keras_backend.set_session(tf.Session(config=config_proto))
@@ -345,12 +346,15 @@ class YOLO(object):
         train_generator = BatchGenerator(train_imgs,
                                      generator_config,
                                      evts_per_file,
-                                     norm=self.feature_extractor.normalize)
+                                     norm=self.feature_extractor.normalize,
+                                     sparse=self.sparse)
         valid_generator = BatchGenerator(valid_imgs,
                                      generator_config,
                                      evts_per_file,
                                      norm=self.feature_extractor.normalize,
-                                     jitter=False)
+                                     jitter=False,
+                                     sparse=self.sparse)
+
         logger.debug("done batch generators")
                                      
         self.warmup_batches  = warmup_epochs * (train_times * len(train_generator) + valid_times * len(valid_generator))

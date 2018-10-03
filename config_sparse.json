@@ -9,8 +9,8 @@
    },
 
    "train": {
-      "train_image_folder":   "/projects/datascience/parton/atlasml/data/*jets/*/*.npz"
-      "evts_per_file":        10,
+      "train_image_folder":   "/projects/datascience/aheye/data/atlas/*jets/*/*.pickle"
+      "evts_per_file":        1,
        
       "train_times":          1,
       "pretrained_weights":   "",
