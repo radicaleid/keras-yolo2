@@ -2,19 +2,19 @@
    "model" : {
       "backend":              "Full Yolo",
       "input_shape":          [16, 256, 9600],
-      "anchors":              [0.21,0.49, 0.29,1.31, 0.47,0.66, 0.55,1.55, 1.08,1.33],
+      "anchors":              [7.64,0.88],
       "max_box_per_image":    10,
       "labels":               ["udjet","sjet", "cjet","bjet", "gjet"]
    },
 
    "train": {
-      "train_image_folder":   "/lcrc/group/ATLAS/users/rwang/ML/btaggingML/scripts/figures/2D/event1*",
+      "train_image_folder":   "/lcrc/group/ATLAS/users/rwang/ML/btaggingML/scripts/figures/2D/test/event12*",
       "evts_per_file":        10,
        
-      "train_times":          8,
+      "train_times":          4,
       "pretrained_weights":   "",
-      "batch_size":           1,
-      "learning_rate":        1e-3,
+      "batch_size":           2,
+      "learning_rate":        1e-4,
       "nb_epochs":            1,
       "warmup_epochs":        0,
 

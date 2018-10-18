@@ -17,7 +17,7 @@ argparser.add_argument(
 argparser.add_argument(
     '-a',
     '--anchors',
-    default=5,
+    default=1,
     help='number of anchors to use')
 
 def IOU(ann, centroids):
@@ -108,7 +108,7 @@ def main(argv):
     with open(args.conf) as config_buffer:
       config = json.loads(config_buffer.read())
 
-    filelist = glob.glob(config['train']['train_image_folder']+'/*')
+    filelist = glob.glob(config['train']['train_image_folder'])
 
     # run k_mean to find the anchors
     annotation_dims = []
@@ -117,9 +117,9 @@ def main(argv):
       for objs in train_imgs['truth']:
         for obj in objs:
           print obj
-          relative_w = obj[3]/(config['model']['input_shape'][1]/16.)
-          relative_h = obj[4]/(config['model']['input_shape'][0]/16.)
-          annotation_dims.append(tuple(map(float, (relative_h,relative_w))))
+          relative_w = obj[3]/(config['model']['input_shape'][2]/16./20)
+          relative_h = obj[4]/(config['model']['input_shape'][1]/16.)
+          annotation_dims.append(tuple(map(float, (relative_w,relative_h))))
 
     annotation_dims = np.array(annotation_dims)
     centroids = run_kmeans(annotation_dims, num_anchors)
@@ -128,6 +128,7 @@ def main(argv):
     # write anchors to file
     print('\naverage IOU for', num_anchors, 'anchors:', '%0.2f' % avg_IOU(annotation_dims, centroids))
     print_anchors(centroids)
+    print 'h*w'
 
 if __name__ == '__main__':
     args = argparser.parse_args()

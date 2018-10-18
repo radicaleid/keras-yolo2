@@ -3,7 +3,7 @@ from keras.layers import Reshape, Activation, Conv2D, Input, MaxPooling2D, Batch
 from keras.layers.advanced_activations import LeakyReLU
 import tensorflow as tf
 import numpy as np
-import os
+import os,time
 import cv2
 from utils import decode_netout, compute_overlap, compute_ap
 from keras.applications.mobilenet import MobileNet
@@ -86,7 +86,8 @@ class YOLO(object):
         self.model.summary()
 
     def custom_loss(self, y_true, y_pred):
-        print 'custom_loss...'
+        start = time.time()
+        print 'custom_loss...',time.time()-start
         mask_shape = tf.shape(y_true)[:4]
         
         cell_x = tf.to_float(tf.reshape(tf.tile(tf.range(self.grid_w), [self.grid_h]), (1, self.grid_h, self.grid_w, 1, 1)))
@@ -104,15 +105,21 @@ class YOLO(object):
         seen = tf.Variable(0.)
         total_recall = tf.Variable(0.)
         
+        print 'Adjust prediction...',time.time()-start
         """
         Adjust prediction
         """
         ### adjust x and y
         sess = tf.Session()
         #print(sess.run(cell_grid))
+        print y_true,y_pred
+        #y_true = tf.Print(y_true,[y_true],'y_true',summarize=2500)
+        #y_pred = tf.Print(y_pred,[y_pred],'ini y_pred',summarize=2500)
         pred_box_xy = tf.sigmoid(y_pred[..., :2]) + cell_grid
+        #pred_box_xy = tf.Print(pred_box_xy,[pred_box_xy],'pred_box_xy',summarize=10)
         ### adjust w and h
         pred_box_wh = tf.exp(y_pred[..., 2:4]) * np.reshape(self.anchors, [1,1,1,self.nb_box,2])
+        #pred_box_wh = tf.Print(pred_box_wh,[pred_box_wh],'pred_box_wh',summarize=10)
         
         ### adjust confidence
         pred_box_conf = tf.sigmoid(y_pred[..., 4])
@@ -128,8 +135,7 @@ class YOLO(object):
         
         ### adjust w and h
         true_box_wh = y_true[..., 2:4] # number of cells accross, horizontally and vertically
-        print true_box_wh
-        
+        '''
         ### adjust confidence
         true_wh_half = true_box_wh / 2.
         true_mins    = true_box_xy - true_wh_half
@@ -149,18 +155,21 @@ class YOLO(object):
 
         union_areas = pred_areas + true_areas - intersect_areas
         iou_scores  = tf.truediv(intersect_areas, union_areas)
-        
-        true_box_conf = iou_scores * y_true[..., 4]
+        '''
+        #true_box_conf = iou_scores * y_true[..., 4]
+        true_box_conf = y_true[..., 4]
         
         ### adjust class probabilities
         true_box_class = tf.argmax(y_true[..., 5:], -1)
         
+        print 'Determine the masks...',time.time()-start
         """
         Determine the masks
         """
         ### coordinate mask: simply the position of the ground truth boxes (the predictors)
         coord_mask = tf.expand_dims(y_true[..., 4], axis=-1) * self.coord_scale
-        
+        #coord_mask = tf.Print(coord_mask,[coord_mask],'coord_mask',summarize=10)
+        '''
         ### confidence mask: penelize predictors + penalize boxes with low IOU
         # penalize the confidence of the boxes, which have IOU with some ground truth box < 0.6
         true_xy = self.true_boxes[..., 0:2]
@@ -171,6 +180,7 @@ class YOLO(object):
         true_maxes   = true_xy + true_wh_half
         
         pred_xy = tf.expand_dims(pred_box_xy, 4)
+        pred_xy = tf.Print(pred_xy,[pred_xy],'pred_xy',summarize=10)
         pred_wh = tf.expand_dims(pred_box_wh, 4)
         
         pred_wh_half = pred_wh / 2.
@@ -189,14 +199,16 @@ class YOLO(object):
         iou_scores  = tf.truediv(intersect_areas, union_areas)
 
         best_ious = tf.reduce_max(iou_scores, axis=4)
-        conf_mask = conf_mask + tf.to_float(best_ious < 0.6) * (1 - y_true[..., 4]) * self.no_object_scale
-        
+        best_ious = tf.Print(best_ious,[best_ious],'best_ious',summarize=10)
+        #conf_mask = conf_mask + tf.to_float(best_ious < 0.6) * (1 - y_true[..., 4]) * self.no_object_scale #
+        '''
         # penalize the confidence of the boxes, which are reponsible for corresponding ground truth box
         conf_mask = conf_mask + y_true[..., 4] * self.object_scale
         
         ### class mask: simply the position of the ground truth boxes (the predictors)
         class_mask = y_true[..., 4] * tf.gather(self.class_wt, true_box_class) * self.class_scale       
         
+        print 'Warm-up training...',time.time()-start
         """
         Warm-up training
         """
@@ -213,6 +225,7 @@ class YOLO(object):
                                        true_box_wh,
                                        coord_mask])
         
+        print 'Finalize the loss...',time.time()-start
         """
         Finalize the loss
         """
@@ -230,6 +243,7 @@ class YOLO(object):
                       lambda: loss_xy + loss_wh + loss_conf + loss_class + 10,
                       lambda: loss_xy + loss_wh + loss_conf + loss_class)
         
+        print 'debug...',time.time()-start
         if self.debug:
             nb_true_box = tf.reduce_sum(y_true[..., 4])
             nb_pred_box = tf.reduce_sum(tf.to_float(true_box_conf > 0.5) * tf.to_float(pred_box_conf > 0.3))
@@ -345,9 +359,9 @@ class YOLO(object):
                                  validation_data  = valid_generator,
                                  validation_steps = len(valid_generator) * valid_times,
                                  callbacks        = [early_stop, checkpoint, tensorboard], 
-                                 workers          = 3,
-                                 max_queue_size   = 8)      
-
+                                 workers          = 1,
+                                 max_queue_size   = 10)      
+        
         ############################################
         # Compute mAP on the validation set
         ############################################
@@ -379,15 +393,15 @@ class YOLO(object):
         """
         print 'evaluate...'
         # gather all detections and annotations
-        all_detections     = [[None for i in range(generator.num_classes)] for j in range(generator.size()*generator.config['EVTS_PER_FILE']*generator.config['BATCH_SIZE'])]
-        all_annotations    = [[None for i in range(generator.num_classes)] for j in range(generator.size()*generator.config['EVTS_PER_FILE']*generator.config['BATCH_SIZE'])]
+        all_detections     = [[None for i in range(generator.num_classes)] for j in range(generator.size()*generator.config['EVTS_PER_FILE'])]
+        all_annotations    = [[None for i in range(generator.num_classes)] for j in range(generator.size()*generator.config['EVTS_PER_FILE'])]
 
 
-        for i in range(generator.size()*generator.config['EVTS_PER_FILE']*generator.config['BATCH_SIZE']):
+        for i in range(generator.size()*generator.config['EVTS_PER_FILE']):
             raw_image = generator.load_image(i)
             
             #print raw_image.shape
-            raw_height, raw_width, raw_channels = raw_image.shape
+            raw_channels, raw_height, raw_width = raw_image.shape
             # make the boxes and the labels
             pred_boxes  = self.predict(raw_image)
 
@@ -475,7 +489,7 @@ class YOLO(object):
         return average_precisions    
 
     def predict(self, image):
-        image_h, image_w, _ = image.shape
+        _, image_h, image_w = image.shape
         #image = cv2.resize(image, (self.input_shape[0], self.input_shape[1]))
         image = self.feature_extractor.normalize(image)
         
