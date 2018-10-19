@@ -312,6 +312,10 @@ class YOLO(object):
             loss = tf.Print(loss, [true_box_wh[indices[0][0],indices[0][1],indices[0][2],indices[0][3]]], message='true_box_wh \t', summarize=1000)
             loss = tf.Print(loss, [pred_box_wh[indices[0][0],indices[0][1],indices[0][2],indices[0][3]]], message='pred_box_wh \t', summarize=1000)
 
+
+            loss = tf.Print(loss, [true_box_xy[indices[0][0],indices[0][1],indices[0][2],indices[0][3]]], message='true_box_xy \t', summarize=1000)
+            loss = tf.Print(loss, [pred_box_xy[indices[0][0],indices[0][1],indices[0][2],indices[0][3]]], message='pred_box_xy \t', summarize=1000)
+
             loss = tf.Print(loss, [loss_xy], message='Loss XY \t', summarize=1000)
             loss = tf.Print(loss, [loss_wh], message='Loss WH \t', summarize=1000)
             loss = tf.Print(loss, [loss_conf], message='Loss Conf \t', summarize=1000)
@@ -445,7 +449,7 @@ class YOLO(object):
             callbacks.append(self.hvd.callbacks.MetricAverageCallback())
 
             # create tensorboard callback
-            tensorboard = TB2(evaluate=self.evaluate,generator=valid_generator,log_every=10,log_dir=log_path,update_freq='batch')
+            tensorboard = TB2(evaluate=self.evaluate,generator=valid_generator,log_every=2,log_dir=log_path,update_freq='batch')
             callbacks.append(tensorboard)
             if self.hvd.rank() == 0:
                verbose = self.config_file['train']['verbose']
@@ -500,11 +504,7 @@ class YOLO(object):
                                         save_best_only=True,
                                         mode='min',
                                         period=1)
-           tensorboard = TensorBoard(log_dir='./logs',
-                                     histogram_freq=0,
-                                     # write_batch_performance=True,
-                                     write_graph=True,
-                                     write_images=False)
+           tensorboard = TB2(evaluate=self.evaluate,generator=valid_generator,log_every=10,log_dir=log_path,update_freq='batch')
 
            callbacks = [
                early_stop,
@@ -669,7 +669,7 @@ class YOLO(object):
         input_image = np.expand_dims(input_image, 0)
         dummy_array = np.zeros((1,1,1,1,self.max_box_per_image,4))
 
-        netout = self.model.predict([image, dummy_array])[0]
+        netout = self.model.predict([input_image, dummy_array])[0]
         boxes  = decode_netout(netout, self.anchors, self.nb_class)
 
         return boxes

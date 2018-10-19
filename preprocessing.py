@@ -150,20 +150,30 @@ class BatchGenerator(Sequence):
         return np.stack(dense_mats)  # tf.sparse_to_dense(new_indices, shape, np.concatenate(new_data)).eval()
 
     def load_annotation(self, i):
-        file_index = int(i / self.evts_per_file)
-        image_index = i % self.evts_per_file
-        file_content = np.load(self.filelist[file_index])
+        if self.sparse:
+            file_content = np.load(self.filelist[i])
+            objs = file_content[2]
+        else:
+            file_index = int(i / self.evts_per_file)
+            image_index = i % self.evts_per_file
+            file_content = np.load(self.filelist[file_index])
+            objs = file_content['truth'][image_index]
+        
         annots = []
-        for obj in file_content['truth'][image_index]:
+        for obj in objs:
             annot = [obj[BBOX_CENTER_X], obj[BBOX_CENTER_Y], obj[BBOX_WIDTH], obj[BBOX_HEIGHT], np.argmax(obj[5:])]
             annots.append(annot)
         return np.array(annots)
 
     def load_image(self, i):
-        file_index = int(i / self.evts_per_file)
-        image_index = i % self.evts_per_file
-        file_content = np.load(self.filelist[file_index])
-        return file_content['raw'][image_index]
+        if self.sparse:
+            file_content = np.load(self.filelist[i])
+            return self.importSparse2DenseTensor(file_content[0], (self.config['IMAGE_C'],self.config['IMAGE_H'],self.config['IMAGE_W']))
+        else:
+            file_index = int(i / self.evts_per_file)
+            image_index = i % self.evts_per_file
+            file_content = np.load(self.filelist[file_index])
+            return file_content['raw'][image_index]
 
     # return a batch of images starting at the given index
     def __getitem__(self, idx):
