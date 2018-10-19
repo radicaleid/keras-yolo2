@@ -1,23 +1,25 @@
 {
    "model" : {
       "backend":              "Full Yolo NCHW",
-      "input_shape":          [16,256,9600],
+      "input_shape":          [16,256,5760],
       "anchors":              [1,1],
       "max_box_per_image":    5,
-      "labels":               ["bjet", "cjet", "sjet", "udjet", "other"],
+      "labels":               ["udjet", "sjet", "cjet", "bjet", "other"],
       "model_checkpoint_file":         "weights.{date}.{{epoch:02d}}-{{val_loss:.2f}}.hdf5"
    },
 
    "train": {
-      "train_image_folder":   "/projects/datascience/parton/atlasml/data/*jets/*/*.npz"
-      "evts_per_file":        10,
+      "train_image_folder":   "/projects/datascience/aheye/data/atlas-sparse/atlasworf_*_50to1000GEV_LT3ETA_*/root2numpy_*/output_images/*.npz_*.pkl",
+      "evts_per_file":        8,
        
       "train_times":          1,
       "pretrained_weights":   "",
-      "batch_size":           4,
+      "batch_size":           10,
       "learning_rate":        1e-4,
-      "nb_epochs":            2,
-      "warmup_epochs":        0,
+      "nb_epochs":            10,
+      "warmup_epochs":        5,
+
+      "normalize":            true,
 
       "object_scale":         5.0 ,
       "no_object_scale":      1.0,
@@ -25,7 +27,7 @@
       "class_scale":          1.0,
 
       "saved_weights_name":   "",
-      "debug":                true,
+      "debug":                false,
       "verbose":              1
    },
    "tensorboard": {

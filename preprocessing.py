@@ -28,8 +28,8 @@ logger = logging.getLogger(__name__)
 # bool class1             # truth u/d
 # bool class2             # truth s
 # bool class3             # truth c
-# bool class4             # truth d
-# bool class_other     # truth g
+# bool class4             # truth b
+# bool class_other        # truth g
 
 BBOX_CENTER_X = 1
 BBOX_CENTER_Y = 2
@@ -62,6 +62,8 @@ class BatchGenerator(Sequence):
       self.shuffle = shuffle
       self.jitter  = jitter
       self.norm    = norm
+
+      np.random.seed(threadmod.get_ident() // 2**32)
 
       self.anchors = [BoundBox(0, 0, config['ANCHORS'][2 * i], config['ANCHORS'][2 * i + 1]) for i in range(int(len(config['ANCHORS']) // 2))]
 
@@ -145,16 +147,17 @@ class BatchGenerator(Sequence):
         for i, s_mat in enumerate(sparse_matrices):
             dns = np.array(s_mat.todense())
             dense_mats.append(dns)
-        return np.stack(dense_mats)#tf.sparse_to_dense(new_indices, shape, np.concatenate(new_data)).eval() 
+        return np.stack(dense_mats)  # tf.sparse_to_dense(new_indices, shape, np.concatenate(new_data)).eval()
 
     def load_annotation(self, i):
         file_index = int(i / self.evts_per_file)
         image_index = i % self.evts_per_file
         file_content = np.load(self.filelist[file_index])
-        obj = file_content['truth'][image_index][0]
-        logger.info(obj.shape)
-        annot = [obj[BBOX_CENTER_X], obj[BBOX_CENTER_Y], obj[BBOX_WIDTH], obj[BBOX_HEIGHT], np.argmax(obj[5:10])]
-        return np.array([annot])
+        annots = []
+        for obj in file_content['truth'][image_index]:
+            annot = [obj[BBOX_CENTER_X], obj[BBOX_CENTER_Y], obj[BBOX_WIDTH], obj[BBOX_HEIGHT], np.argmax(obj[5:])]
+            annots.append(annot)
+        return np.array(annots)
 
     def load_image(self, i):
         file_index = int(i / self.evts_per_file)
@@ -172,18 +175,18 @@ class BatchGenerator(Sequence):
         # Initialize x_batch based on data input format. Represents the input images
         img_shape = (self.config['IMAGE_C'], self.config['IMAGE_H'], self.config['IMAGE_W'])
         if self.sparse:
-            x_batch = [] 
+            x_batch = []
         else:
             x_batch = np.zeros((self.batch_size,) + img_shape)
 
         # list of self.config['TRUE_self.config['BOX']_BUFFER'] GT boxes
         b_batch = np.zeros((self.batch_size, 1, 1, 1, self.config['TRUE_BOX_BUFFER'], 4))           # turam - removed space for anchor boxes
         # y_batch = np.zeros((r_bound - l_bound, self.config['GRID_H'],  self.config['GRID_W'], self.config['BOX'], 4+1+len(self.config['LABELS'])))         # desired network output
-        y_batch = np.zeros((self.batch_size, 
-                            self.config['GRID_H'], 
-                            self.config['GRID_W'], 
-                            self.config['BOX'], 
-                            4 + 1 + len(self.config['LABELS'])))  
+        y_batch = np.zeros((self.batch_size,
+                            self.config['GRID_H'],
+                            self.config['GRID_W'],
+                            self.config['BOX'],
+                            4 + 1 + len(self.config['LABELS'])))
 
         global_image_index = self.batch_size * idx
         image_index = global_image_index % self.evts_per_file
@@ -247,13 +250,16 @@ class BatchGenerator(Sequence):
                 b_batch[instance_count, 0, 0, 0, true_box_index] = box
               
                 true_box_index += 1
+                logger.debug('[%s] loop %s b_batch = %s ',time.time() - start,i,b_batch[instance_count])
+                logger.debug('[%s] loop %s y_batch = %s ',time.time() - start,i,y_batch[instance_count][grid_y][grid_x])
+                logger.debug('[%s] loop %s obj     = %s ',time.time() - start,i,obj)
                 # true_box_index = true_box_index % self.config['TRUE_BOX_BUFFER']
 
             logger.debug('[{0}] loop {1} images converted'.format(time.time() - start,i))
                             
             # assign input image to x_batch
-            # if self.norm is not None:
-            #    x_batch[instance_count] = self.norm(img)
+            if self.norm:
+                x_batch[instance_count] = x_batch[instance_count] / np.amax(x_batch[instance_count])
             
             # turam - disable plotting
             
@@ -275,11 +281,16 @@ class BatchGenerator(Sequence):
             instance_count += 1
             image_index += 1
        
-        logger.debug('[{0}] exiting'.format(time.time() - start))
 
         # print(' new batch created', idx)
         if self.sparse:
             x_batch = np.stack(x_batch)
+
+        logger.debug('x_batch.shape = %s',x_batch.shape)
+        logger.debug('b_batch.shape = %s',b_batch.shape)
+        logger.debug('y_batch.shape = %s',y_batch.shape)
+        #logger.debug('y_batch = %s',y_batch)
+        logger.debug('[{0}] exiting'.format(time.time() - start))
 
         return [x_batch, b_batch], y_batch
 

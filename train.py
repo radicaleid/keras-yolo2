@@ -48,7 +48,7 @@ def _main_():
 
    logger.info('config = %s',config)
    logger.info('train_image_folder =   %s',glob_str)
-   logger.info('filelist =             %s',filelist)
+   #logger.info('filelist =             %s',filelist)
 
 
    ###############################

@@ -1,5 +1,6 @@
 from keras.models import Model
 import tensorflow as tf
+import numpy as np
 from keras.layers import Reshape, Activation, Conv2D, Input, MaxPooling2D, BatchNormalization, Flatten, Dense, Lambda
 from keras.layers.advanced_activations import LeakyReLU
 from keras.layers.merge import concatenate
@@ -29,9 +30,9 @@ class BaseFeatureExtractor(object):
         raise NotImplementedError("error message")
 
     def get_output_shape(self):
-        # return self.feature_extractor.get_output_shape_at(-1)[1:3]
+        return self.feature_extractor.get_output_shape_at(-1)[1:3]
         # taylor: changed idices to match NCHW
-        return self.feature_extractor.get_output_shape_at(-1)[2:4]
+        # return self.feature_extractor.get_output_shape_at(-1)[2:4]
 
     def extract(self, input_image):
         return self.feature_extractor(input_image)
@@ -173,10 +174,16 @@ class FullYoloFeatureNCHW(BaseFeatureExtractor):
         x = LeakyReLU(alpha=0.1)(x)
 
         self.feature_extractor = Model(input_image, x)
+        # Taylor: don't have model weights to load (yet)
         # self.feature_extractor.load_weights(FULL_YOLO_BACKEND_PATH)
 
     def normalize(self, image):
-        return image / 255.
+        return image / np.amax(image)
+
+    def get_output_shape(self):
+        # return self.feature_extractor.get_output_shape_at(-1)[1:3]
+        # taylor: changed idices to match NCHW
+        return self.feature_extractor.get_output_shape_at(-1)[2:4]
 
 
 class FullYoloFeature(BaseFeatureExtractor):

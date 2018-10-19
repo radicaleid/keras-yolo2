@@ -14,7 +14,7 @@ from preprocessing import BatchGenerator
 from backend import TinyYoloFeature, FullYoloFeature, MobileNetFeature, SqueezeNetFeature, Inception3Feature, VGG16Feature, ResNet50Feature
 from backend import FullYoloFeatureNCHW
 
-from callbacks import TB
+from callbacks import TB2
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ class YOLO(object):
            from plugin_keras import InitPluginCallback, BroadcastVariablesCallback, DistributedOptimizer
            self.mc = mc
            self.InitPluginCallback = InitPluginCallback
-           self.BroadcastVariablesCallback =BroadcastVariablesCallback
+           self.BroadcastVariablesCallback = BroadcastVariablesCallback
            self.DistributedOptimizer = DistributedOptimizer
            logger.info('ml_comm from: %s',mc.__file__)
            logger.debug('mc init')
@@ -107,6 +107,7 @@ class YOLO(object):
 
         self.feature_extractor.feature_extractor.summary()
         self.grid_h, self.grid_w = self.feature_extractor.get_output_shape()
+        logger.info('grid h x w = %s x %s',self.grid_h,self.grid_w)
         features = self.feature_extractor.extract(input_image)
 
         # make the object detection layer
@@ -124,6 +125,10 @@ class YOLO(object):
 
         
         # initialize the weights of the detection layer
+        # Taylor: Keras should initialize ALL model weights randomly
+        # Tom: so where are the weights being initialized then?
+        # Taylor: appears all weights are initialized at creation of a layer
+        '''
         layer = self.model.layers[-4]
         weights = layer.get_weights()
 
@@ -131,6 +136,7 @@ class YOLO(object):
         new_bias   = np.random.normal(size=weights[1].shape) / (self.grid_h * self.grid_w)
 
         layer.set_weights([new_kernel, new_bias])
+        '''
 
         # print a summary of the whole model
         self.model.summary()
@@ -180,7 +186,7 @@ class YOLO(object):
         ### adjust w and h
         true_box_wh = y_true[..., 2:4]  # number of cells accross, horizontally and vertically
         
-        '''
+        
         ### adjust confidence
         true_wh_half = true_box_wh / 2.
         true_mins    = true_box_xy - true_wh_half
@@ -190,7 +196,7 @@ class YOLO(object):
         pred_mins    = pred_box_xy - pred_wh_half
         pred_maxes   = pred_box_xy + pred_wh_half
         
-        intersect_mins  = tf.maximum(pred_mins,  true_mins)
+        intersect_mins  = tf.maximum(pred_mins, true_mins)
         intersect_maxes = tf.minimum(pred_maxes, true_maxes)
         intersect_wh    = tf.maximum(intersect_maxes - intersect_mins, 0.)
         intersect_areas = intersect_wh[..., 0] * intersect_wh[..., 1]
@@ -200,7 +206,7 @@ class YOLO(object):
 
         union_areas = pred_areas + true_areas - intersect_areas
         iou_scores  = tf.truediv(intersect_areas, union_areas)
-        '''
+        
         true_box_conf = y_true[..., 4]
         
         ### adjust class probabilities
@@ -212,7 +218,7 @@ class YOLO(object):
         ### coordinate mask: simply the position of the ground truth boxes (the predictors)
         coord_mask = tf.expand_dims(y_true[..., 4], axis=-1) * self.coord_scale
         
-        '''
+        
         ### confidence mask: penelize predictors + penalize boxes with low IOU
         # penalize the confidence of the boxes, which have IOU with some ground truth box < 0.6
         true_xy = self.true_boxes[..., 0:2]
@@ -229,7 +235,7 @@ class YOLO(object):
         pred_mins    = pred_xy - pred_wh_half
         pred_maxes   = pred_xy + pred_wh_half
         
-        intersect_mins  = tf.maximum(pred_mins,  true_mins)
+        intersect_mins  = tf.maximum(pred_mins, true_mins)
         intersect_maxes = tf.minimum(pred_maxes, true_maxes)
         intersect_wh    = tf.maximum(intersect_maxes - intersect_mins, 0.)
         intersect_areas = intersect_wh[..., 0] * intersect_wh[..., 1]
@@ -243,7 +249,7 @@ class YOLO(object):
         best_ious = tf.reduce_max(iou_scores, axis=4)
 
         conf_mask = conf_mask + tf.to_float(best_ious < 0.6) * (1 - y_true[..., 4]) * self.no_object_scale
-        '''
+        
 
         # penalize the confidence of the boxes, which are reponsible for corresponding ground truth box
         conf_mask = conf_mask + y_true[..., 4] * self.object_scale
@@ -290,6 +296,21 @@ class YOLO(object):
             
             current_recall = nb_pred_box / (nb_true_box + 1e-6)
             total_recall = tf.assign_add(total_recall, current_recall)
+
+            zero = tf.constant(0, dtype=tf.float32)
+            where = tf.not_equal(y_true[...,4], zero)
+            indices = tf.where(where)
+
+
+
+            loss = tf.Print(loss, [y_true], message='y_true \t', summarize=1000)
+            loss = tf.Print(loss, [tf.shape(y_true)], message='y_true shape \t', summarize=1000)
+            loss = tf.Print(loss, [y_true[indices[0][0],indices[0][1],indices[0][2],indices[0][3]]], message='y_true value \t', summarize=1000)
+            loss = tf.Print(loss, [indices[0][0],indices[0][1],indices[0][2],indices[0][3]], message='y_true value indices\t', summarize=1000)
+            loss = tf.Print(loss, [y_pred[indices[0][0],indices[0][1],indices[0][2],indices[0][3]]], message='y_pred value \t', summarize=1000)
+
+            loss = tf.Print(loss, [true_box_wh[indices[0][0],indices[0][1],indices[0][2],indices[0][3]]], message='true_box_wh \t', summarize=1000)
+            loss = tf.Print(loss, [pred_box_wh[indices[0][0],indices[0][1],indices[0][2],indices[0][3]]], message='pred_box_wh \t', summarize=1000)
 
             loss = tf.Print(loss, [loss_xy], message='Loss XY \t', summarize=1000)
             loss = tf.Print(loss, [loss_wh], message='Loss WH \t', summarize=1000)
@@ -346,12 +367,12 @@ class YOLO(object):
         train_generator = BatchGenerator(train_imgs,
                                      generator_config,
                                      evts_per_file,
-                                     norm=self.feature_extractor.normalize,
+                                     norm=self.config_file['train']['normalize'],
                                      sparse=self.sparse)
         valid_generator = BatchGenerator(valid_imgs,
                                      generator_config,
                                      evts_per_file,
-                                     norm=self.feature_extractor.normalize,
+                                     norm=self.config_file['train']['normalize'],
                                      jitter=False,
                                      sparse=self.sparse)
 
@@ -390,12 +411,12 @@ class YOLO(object):
             nb_epochs = int(nb_epochs / self.mc.get_nranks())
             if nb_epochs == 0:
               nb_epochs = 1
-            total_steps = int(math.ceil((warmup_epochs + nb_epochs)*(
-                           (train_times*len(train_imgs)+
-                           valid_times*len(valid_imgs))/self.batch_size)))
+            total_steps = int(math.ceil((warmup_epochs + nb_epochs) * (
+                           (train_times*len(train_imgs) +
+                           valid_times*len(valid_imgs)) / self.batch_size)))
 
-            #if hvd.rank() == 0:
-            #if mc.get_rank() == 0:
+            # if hvd.rank() == 0:
+            # if mc.get_rank() == 0:
             #  print('Total params: {:,}'.format(trainable_count + non_trainable_count))
             #  print('Trainable params: {:,}'.format(trainable_count))
             #  print('Non-trainable params: {:,}'.format(non_trainable_count))
@@ -406,7 +427,6 @@ class YOLO(object):
 
         dateString = datetime.datetime.strftime(datetime.datetime.now(),'%Y-%m-%d-%H-%M-%S')
         log_path = os.path.join(self.config_file['tensorboard']['log_dir'],dateString)
-
         
 
         verbose = self.config_file['train']['verbose']
@@ -425,12 +445,7 @@ class YOLO(object):
             callbacks.append(self.hvd.callbacks.MetricAverageCallback())
 
             # create tensorboard callback
-            tensorboard = TB(log_dir=log_path,
-                           histogram_freq=self.config_file['tensorboard']['histogram_freq'],
-                           write_graph=self.config_file['tensorboard']['write_graph'],
-                           write_images=self.config_file['tensorboard']['write_images'],
-                           write_grads=self.config_file['tensorboard']['write_grads'],
-                           embeddings_freq=self.config_file['tensorboard']['embeddings_freq'])
+            tensorboard = TB2(evaluate=self.evaluate,generator=valid_generator,log_every=10,log_dir=log_path,update_freq='batch')
             callbacks.append(tensorboard)
             if self.hvd.rank() == 0:
                verbose = self.config_file['train']['verbose']
@@ -454,6 +469,11 @@ class YOLO(object):
             callbacks.append(init_plugin)
             broadcast   = self.BroadcastVariablesCallback(0)
             callbacks.append(broadcast)
+
+            # create tensorboard callback
+            tensorboard = TB2(evaluate=self.evaluate,generator=valid_generator,log_every=10,log_dir=log_path,update_freq='batch')
+            callbacks.append(tensorboard)
+
             if self.mc.get_rank() == 0:
                verbose = self.config_file['train']['verbose']
                os.makedirs(log_path)
@@ -637,12 +657,16 @@ class YOLO(object):
         return average_precisions
 
     def predict(self, image):
-        _, image_h, image_w = image.shape
+        # Taylor: don't use this anywhere
+        # _, image_h, image_w = image.shape
+        # Taylor: we don't check image size
         # image = cv2.resize(image, (self.input_shape[1], self.input_shape[2]))
         image = self.feature_extractor.normalize(image)
 
+        # Taylor: swap channel indices
         # input_image = image[:,:,::-1]
-        image = np.expand_dims(image, 0)
+        input_image = image[::-1,:,:]
+        input_image = np.expand_dims(input_image, 0)
         dummy_array = np.zeros((1,1,1,1,self.max_box_per_image,4))
 
         netout = self.model.predict([image, dummy_array])[0]

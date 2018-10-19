@@ -1,5 +1,26 @@
 from keras import callbacks
+import keras.backend as K
 import tensorflow as tf
+
+
+class TB2(callbacks.TensorBoard):
+
+    def __init__(self,evaluate,generator,log_every=1,**kwargs):
+        super(TB2,self).__init__(**kwargs)
+        self.evaluate = evaluate
+        self.generator = generator
+        self.log_every = log_every
+
+    def on_batch_end(self,batch,logs=None):
+
+        d = {'lr': K.eval(self.model.optimizer.lr)}
+        if batch % self.log_every == 0:
+            accuracy = self.evaluate(self.generator)
+            d['accuracy':accuracy]
+
+        logs.update(d)
+        super(TB2,self).on_batch_end(batch, logs)
+
 
 
 class TB(callbacks.TensorBoard):
