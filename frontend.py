@@ -316,6 +316,8 @@ class YOLO(object):
             loss = tf.Print(loss, [true_box_xy[indices[0][0],indices[0][1],indices[0][2],indices[0][3]]], message='true_box_xy \t', summarize=1000)
             loss = tf.Print(loss, [pred_box_xy[indices[0][0],indices[0][1],indices[0][2],indices[0][3]]], message='pred_box_xy \t', summarize=1000)
 
+            loss = tf.Print(loss, [seen,self.warmup_batches + 1], message='seen,self.warmup_batches + 1 \t', summarize=1000)
+
             loss = tf.Print(loss, [loss_xy], message='Loss XY \t', summarize=1000)
             loss = tf.Print(loss, [loss_wh], message='Loss WH \t', summarize=1000)
             loss = tf.Print(loss, [loss_conf], message='Loss Conf \t', summarize=1000)
@@ -400,7 +402,7 @@ class YOLO(object):
 
         # self.model.compile(loss='mean_squared_error', optimizer=optimizer)
         logger.debug("compile model")
-        self.model.compile(loss=self.custom_loss, optimizer=optimizer)
+        self.model.compile(loss=self.custom_loss, optimizer=optimizer, metrics=['accuracy'])#rwang add metrics=['accuracy'] to return acc of the model
         logger.debug("done compile model")
 
         # To use Cray Plugin we need to calculate the number of trainable variables 
@@ -537,7 +539,7 @@ class YOLO(object):
 
         # print evaluation
         for label, average_precision in average_precisions.items():
-            logger.info(self.labels[label], '{:.4f}'.format(average_precision))
+            logger.info(self.labels[label]+" %s", '{:.4f}'.format(average_precision))
         logger.info('mAP: {:.4f}'.format(sum(average_precisions.values()) / len(average_precisions)))
 
     def evaluate(self,

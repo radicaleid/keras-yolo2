@@ -20,10 +20,10 @@ class TB2(callbacks.TensorBoard):
         if batch % self.log_every == 0:
             accuracy = self.evaluate(self.generator)
             logger.info('accuracy = %s',accuracy)
-            d['accuracy':accuracy]
+            #d['accuracy']=accuracy
 
-        logs.update(d)
-        super(TB2,self).on_batch_end(batch, logs)
+        #logs.update(d)
+        #super(TB2,self).on_batch_end(batch, logs)
 
 
 
